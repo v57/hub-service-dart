@@ -10,6 +10,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:channel_dart/channel.dart';
+import 'package:channel_dart/client.dart';
 
 /// Profile sent to the hub as hub/profile/update on connect (only if set).
 class Profile {
@@ -108,6 +109,39 @@ class Service {
   /// order; the services list is built from it sorted by path (TS parity).
   final Set<String> _paths = <String>{};
 
+  /// Client sender once [start] has connected; null before.
+  ClientSender<Object?>? _sender;
+
+  /// Connects to the hub. On every (re)connect sends hub/profile/update (if a
+  /// profile is set) and hub/service/update with the current services+apps —
+  /// the hub drops services on disconnect. No-op if already started.
+  Service start() {
+    if (_sender != null) {
+      return this;
+    }
+    _sender = channel.connect(
+      address!,
+      options: ClientOptions<Object?>(onConnect: _sendUpdates),
+    );
+    return this;
+  }
+
+  /// Calls an API through the hub (client side). Throws a [StateError] if
+  /// [start] has not been called.
+  Future<Object?> send(String path, {Object? body, Object? context}) {
+    return _senderOrError().send<Object?>(path, body: body, context: context);
+  }
+
+  /// Opens a stream call through the hub (client side). Throws a [StateError]
+  /// if [start] has not been called.
+  Stream<Object?> values(String path, {Object? body, Object? context}) {
+    return _senderOrError().values<Object?>(
+      path,
+      body: body,
+      context: context,
+    );
+  }
+
   /// Registers a request/response API endpoint.
   ///
   /// [handler] receives the request body (may be sync or async) and returns
@@ -178,5 +212,28 @@ class Service {
       }
     }
     return entry;
+  }
+
+  ClientSender<Object?> _senderOrError() {
+    final sender = _sender;
+    if (sender == null) {
+      throw StateError('Service not started');
+    }
+    return sender;
+  }
+
+  Future<void> _sendUpdates(Sender<Object?> sender) async {
+    try {
+      final profile = this.profile;
+      if (profile != null) {
+        await sender.send<Object?>(
+          'hub/profile/update',
+          body: profile.toJson(),
+        );
+      }
+    } catch (_) {}
+    try {
+      await sender.send<Object?>('hub/service/update', body: update());
+    } catch (_) {}
   }
 }

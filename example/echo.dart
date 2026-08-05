@@ -7,7 +7,7 @@ import 'dart:async';
 import 'package:hub_service/hub_service.dart';
 
 Future<void> main() async {
-  final service = Service(
+  Service(
     name: 'Echo',
     icon: const <String, Object?>{'symbol': 'speaker.wave.2', 'text': 'E'},
   )

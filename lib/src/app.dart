@@ -5,8 +5,6 @@
 /// header, body, top, bottom, data.
 library;
 
-import 'dart:async';
-
 import 'service.dart';
 
 /// References an API call from a UI element: {path, body?, output?}.

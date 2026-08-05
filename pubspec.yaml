@@ -4,6 +4,7 @@ description: >-
   register apps, and call API through the hub. Lite port: no auth, no keychain,
   no crypto.
 version: 0.1.0
+publish_to: none
 
 environment:
   sdk: ^3.11.0

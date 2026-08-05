@@ -9,8 +9,9 @@ library;
 import 'dart:async';
 import 'dart:io';
 
-import 'package:channel_dart/channel.dart';
 import 'package:channel_dart/client.dart';
+
+import 'app.dart';
 
 /// Profile sent to the hub as hub/profile/update on connect (only if set).
 class Profile {
@@ -171,6 +172,27 @@ class Service {
       (ChannelBody<Object?> body) => handler(body.body),
     );
     return this;
+  }
+
+  /// Registers an app: its header goes to the hub apps list and its path
+  /// serves the AppInterface as a stream (TS parity: the path is also
+  /// callable).
+  Service app(App app) {
+    apps.add(app.header);
+    _addPath(app.header.path, null);
+    channel.stream(
+      app.header.path,
+      (_) => _appInterfaceStream(app),
+    );
+    return this;
+  }
+
+  static Stream<Object?> _appInterfaceStream(App app) {
+    // Yield the interface once, then keep the stream open (TS parity: the
+    // app stays live until the caller cancels or the connection drops).
+    final controller = StreamController<Object?>();
+    controller.add(app.interface());
+    return controller.stream;
   }
 
   /// Builds the current hub/service/update payload (services + apps).

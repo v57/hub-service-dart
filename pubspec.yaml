@@ -1,8 +1,8 @@
 name: hub_service
 description: >-
   Dart port of hub-service — connect to a hub, host post/stream API endpoints,
-  register apps, and call API through the hub. Lite port: no auth, no keychain,
-  no crypto.
+  register apps, and call API through the hub. Auth: ed25519 keychain auth
+  file (hub-pro), TS parity.
 version: 0.1.0
 publish_to: none
 
@@ -12,6 +12,7 @@ environment:
 dependencies:
   channel_dart:
     path: ../channel-dart
+  cryptography: ^2.9.0
 
 dev_dependencies:
   lints: ^6.0.0

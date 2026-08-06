@@ -1,9 +1,10 @@
 /// Core hub-service types (TS service.ts parity).
 ///
-/// Lite port of hub-service: no auth, no keychain, no crypto. The wire
-/// contract matches the TS/Go reference — hub/profile/update and
-/// hub/service/update are re-sent on every (re)connect (the hub drops
-/// services on disconnect).
+/// Port of hub-service (TS reference). Connects with hub-pro auth (a fresh
+/// ed25519 keychain token as the `auth` header + `v: '0'`) on every
+/// (re)connect; hub-lite ignores the auth header entirely. The wire contract
+/// matches the TS/Go reference — hub/profile/update and hub/service/update
+/// are re-sent on every (re)connect (the hub drops services on disconnect).
 library;
 
 import 'dart:async';
@@ -12,6 +13,7 @@ import 'dart:io';
 import 'package:channel_dart/client.dart';
 
 import 'app.dart';
+import 'keychain.dart' as keychain;
 
 /// Profile sent to the hub as hub/profile/update on connect (only if set).
 class Profile {
@@ -83,8 +85,16 @@ class ApiSettings {
 ///   ..start();
 /// ```
 class Service {
-  Service({Object? address, String? name, Object? icon}) {
-    this.address = address ?? (Platform.environment['HUB'] ?? 1997);
+  Service({
+    Object? address,
+    String? name,
+    Object? icon,
+    FutureOr<String> Function()? sign,
+  }) {
+    final env = Platform.environment['HUB'];
+    final envAddress = (env != null && env.isNotEmpty) ? (int.tryParse(env) ?? env) : null;
+    this.address = address ?? envAddress ?? 1997;
+    this.sign = sign ?? keychain.sign;
     if (name != null || icon != null) {
       profile = Profile(name: name, icon: icon);
     }
@@ -95,6 +105,11 @@ class Service {
 
   /// Hub address: a port (int) or a ws:// URL (String).
   late Object? address;
+
+  /// Token factory for hub-pro auth: called fresh on every (re)connect and
+  /// attached as the `auth` header (with `v: '0'`). Defaults to the keychain
+  /// `auth` file in the cwd (TS parity). hub-lite ignores the header.
+  late final FutureOr<String> Function() sign;
 
   /// Profile sent on connect (only if name/icon were provided).
   Profile? profile;
@@ -115,16 +130,27 @@ class Service {
 
   /// Connects to the hub. On every (re)connect sends hub/profile/update (if a
   /// profile is set) and hub/service/update with the current services+apps —
-  /// the hub drops services on disconnect. No-op if already started.
+  /// the hub drops services on disconnect. Attaches a fresh keychain auth
+  /// token as the `auth` header on every (re)connect (hub-pro; hub-lite
+  /// ignores it). No-op if already started.
   Service start() {
     if (_sender != null) {
       return this;
     }
     _sender = channel.connect(
       address!,
-      options: ClientOptions<Object?>(onConnect: _sendUpdates),
+      options: ClientOptions<Object?>(
+        headers: _authHeaders,
+        onConnect: _sendUpdates,
+      ),
     );
     return this;
+  }
+
+  /// Auth headers for hub-pro: a fresh signed token + protocol version.
+  Future<Map<String, String>> _authHeaders() async {
+    final token = await sign();
+    return <String, String>{'auth': token, 'v': '0'};
   }
 
   /// Calls an API through the hub (client side). Throws a [StateError] if
@@ -244,18 +270,34 @@ class Service {
     return sender;
   }
 
-  Future<void> _sendUpdates(Sender<Object?> sender) async {
+  /// Re-announces on every (re)connect.
+  ///
+  /// Fire-and-forget: the channel-dart WebSocketClient awaits the onOpen
+  /// callback before attaching its socket.listen message loop, so awaiting a
+  /// send (which waits for the hub's response) inside onConnect would
+  /// deadlock — the response could never be read and the service update would
+  /// never be sent. The socket write happens synchronously in send(), so
+  /// scheduling both sends as unawaited futures is safe.
+  void _sendUpdates(Sender<Object?> sender) {
     try {
       final profile = this.profile;
       if (profile != null) {
-        await sender.send<Object?>(
-          'hub/profile/update',
-          body: profile.toJson(),
-        );
+        unawaited(_quietSend(sender, 'hub/profile/update', profile.toJson()));
       }
     } catch (_) {}
     try {
-      await sender.send<Object?>('hub/service/update', body: update());
+      unawaited(_quietSend(sender, 'hub/service/update', update()));
+    } catch (_) {}
+  }
+
+  /// Sends a request, swallowing errors (the connection may drop mid-send).
+  Future<void> _quietSend(
+    Sender<Object?> sender,
+    String path,
+    Object? body,
+  ) async {
+    try {
+      await sender.send<Object?>(path, body: body);
     } catch (_) {}
   }
 }

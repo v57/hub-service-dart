@@ -6,3 +6,5 @@ coverage/
 # hub-pro ed25519 key file (never commit private keys)
 auth
 auth.*
+CLAUDE.md
+/.claude

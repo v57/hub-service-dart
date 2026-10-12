@@ -44,7 +44,7 @@ packages:
   channel_dart:
     dependency: "direct main"
     description:
-      path: "../channel-dart"
+      path: "../../Channel/channel-dart"
       relative: true
     source: path
     version: "1.0.0"

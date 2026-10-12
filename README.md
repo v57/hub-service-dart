@@ -24,7 +24,7 @@ Override the key path with the `HUBKEY` env var or `setKeyPath(...)`.
 ## Install
 
 ```bash
-dart pub get   # path dependency on ../channel-dart (see pubspec.yaml)
+dart pub get   # path dependency on ../../Channel/channel-dart (see pubspec.yaml)
 ```
 
 ## Usage

@@ -11,7 +11,7 @@ environment:
 
 dependencies:
   channel_dart:
-    path: ../channel-dart
+    path: ../../Channel/channel-dart
   cryptography: ^2.9.0
 
 dev_dependencies:

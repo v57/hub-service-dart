@@ -157,7 +157,7 @@ class Device {
       _key ??= await keychain.loadKeyFile(path ?? defaultDeviceKeyPath(), private: true);
 
   /// The suggested device name (at most 64 UTF-8 bytes).
-  String get name => _name ??= _truncate(defaultDeviceName(), 64);
+  String get name => _name ??= truncateUtf8(defaultDeviceName(), 64);
 
   Future<String> publicKey() async => keychain.spkiOf(await key());
 
@@ -185,16 +185,17 @@ class Device {
     );
   }
 
-  /// At most [limit] UTF-8 bytes, cut on a character boundary.
-  static String _truncate(String text, int limit) {
-    final buffer = StringBuffer();
-    var bytes = 0;
-    for (final rune in text.runes) {
-      final char = String.fromCharCode(rune);
-      bytes += utf8.encode(char).length;
-      if (bytes > limit) break;
-      buffer.write(char);
-    }
-    return buffer.toString();
+}
+
+/// At most [limit] UTF-8 bytes of [text], cut on a character boundary.
+String truncateUtf8(String text, int limit) {
+  final buffer = StringBuffer();
+  var bytes = 0;
+  for (final rune in text.runes) {
+    final char = String.fromCharCode(rune);
+    bytes += utf8.encode(char).length;
+    if (bytes > limit) break;
+    buffer.write(char);
   }
+  return buffer.toString();
 }

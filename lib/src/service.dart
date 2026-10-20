@@ -94,8 +94,8 @@ class Service {
   /// Without either, the keychain `auth` file signs. [hubKey] is the hub's
   /// key when known up front; otherwise it is learned from hub/info and
   /// pinned. [instance] is this service's name on its device, unique per
-  /// device (default: [name], else the first segment of the first registered
-  /// path, else `service`). [device] is `true` (the default: certify the
+  /// device (default: `HUB_INSTANCE`, else [name], else the cwd name, else
+  /// `service`). [device] is `true` (the default: certify the
   /// service with this device's key when it can be read or created), `false`
   /// (no `device` header) or a [Device].
   Service({
@@ -144,17 +144,23 @@ class Service {
   /// The device that certifies this service; null with device mode off.
   late final Device? device;
 
-  /// The instance name sent in the certificate.
+  /// The instance name sent in the certificate: the option, else
+  /// `HUB_INSTANCE` (the launcher sets it), else the name, else the cwd name,
+  /// else `service`; at most 128 UTF-8 bytes.
   String get instance {
-    final configured = _instance;
-    if (configured != null && configured.isNotEmpty) {
-      return configured;
+    final cwd = Directory.current.uri.pathSegments.where((String s) => s.isNotEmpty);
+    for (final value in <String?>[
+      _instance,
+      Platform.environment['HUB_INSTANCE'],
+      profile?.name,
+      cwd.isEmpty ? null : cwd.last,
+    ]) {
+      if (value != null && value.isNotEmpty) {
+        final name = truncateUtf8(value, 128);
+        return name.isEmpty ? 'service' : name;
+      }
     }
-    final name = profile?.name;
-    if (name != null && name.isNotEmpty) {
-      return name;
-    }
-    return _paths.isEmpty ? 'service' : _paths.first.split('/').first;
+    return 'service';
   }
 
   /// The hubs.json pin key for this hub.

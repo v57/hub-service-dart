@@ -75,14 +75,13 @@ void main() {
     expect(body['device'], await service.device!.publicKey());
   });
 
-  test('instance defaults to the name, then the first path segment', () {
-    expect(Service(name: 'Echo').instance, 'Echo');
-    final service = Service();
-    expect(service.instance, 'service');
-    service
-      ..post('s3/read', (Object? body) => body)
-      ..post('echo', (Object? body) => body);
-    expect(service.instance, 's3');
+  test('instance defaults to HUB_INSTANCE, the name or the cwd name', () {
+    final env = Platform.environment['HUB_INSTANCE'];
+    final cwd = Directory.current.uri.pathSegments.where((String s) => s.isNotEmpty).last;
+    expect(Service().instance, env ?? cwd);
+    expect(Service(name: 'Echo').instance, env ?? 'Echo');
+    expect(Service(instance: 'mine').instance, 'mine');
+    expect(Service(instance: 'é' * 100).instance, 'é' * 64);
   });
 
   test('the instance length is checked', () {

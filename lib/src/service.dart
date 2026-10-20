@@ -1,10 +1,12 @@
 /// Core hub-service types (TS service.ts parity).
 ///
 /// Port of hub-service (TS reference). Connects with hub-pro auth (a fresh
-/// ed25519 keychain token as the `auth` header + `v: '0'`) on every
-/// (re)connect; hub-lite ignores the auth header entirely. The wire contract
-/// matches the TS/Go reference — hub/profile/update and hub/service/update
-/// are re-sent on every (re)connect (the hub drops services on disconnect).
+/// ed25519 keychain token as the `auth` header) on every (re)connect;
+/// hub-lite ignores the auth header entirely. The wire contract matches the
+/// TS/Go reference — hub/profile/update and hub/service/update are re-sent on
+/// every (re)connect (the hub drops services on disconnect). Auth follows
+/// Docs/Devices/protocol.md: v0 tokens until the hub key is pinned from
+/// hub/info, hub-bound v1 tokens after that.
 library;
 
 import 'dart:async';
@@ -85,16 +87,26 @@ class ApiSettings {
 ///   ..start();
 /// ```
 class Service {
+  /// [sign] is a v0 token factory (it can't sign for a hub key); [hubSign]
+  /// gets the pinned hub key, or null, and must sign v1 when it is set.
+  /// Without either, the keychain `auth` file signs. [hubKey] is the hub's
+  /// key when known up front; otherwise it is learned from hub/info and
+  /// pinned.
   Service({
     Object? address,
     String? name,
     Object? icon,
     FutureOr<String> Function()? sign,
+    FutureOr<String> Function(String? hubKey)? hubSign,
+    String? hubKey,
   }) {
     final env = Platform.environment['HUB'];
     final envAddress = (env != null && env.isNotEmpty) ? (int.tryParse(env) ?? env) : null;
     this.address = address ?? envAddress ?? 1997;
     this.sign = sign ?? keychain.sign;
+    _hubSign = hubSign ??
+        (sign == null ? (String? hubKey) => keychain.sign(60, hubKey) : null);
+    _hubKey = hubKey;
     if (name != null || icon != null) {
       profile = Profile(name: name, icon: icon);
     }
@@ -107,9 +119,31 @@ class Service {
   late Object? address;
 
   /// Token factory for hub-pro auth: called fresh on every (re)connect and
-  /// attached as the `auth` header (with `v: '0'`). Defaults to the keychain
-  /// `auth` file in the cwd (TS parity). hub-lite ignores the header.
+  /// attached as the `auth` header (with `v: '0'`) when no hub-aware signer
+  /// is set. Defaults to the keychain `auth` file in the cwd (TS parity).
+  /// hub-lite ignores the header.
   late final FutureOr<String> Function() sign;
+
+  /// Hub-aware token factory: gets the hub key and signs v1 when it is set.
+  FutureOr<String> Function(String? hubKey)? _hubSign;
+
+  String? _hubKey;
+
+  /// The hubs.json pin key for this hub.
+  String get target => keychain.pinAddress(address!);
+
+  /// Pinned hub keys: `hubs.json` beside the service key file.
+  keychain.HubPins get pins =>
+      keychain.HubPins('${File(keychain.keyPath()).parent.path}/hubs.json');
+
+  /// The hub key this service signs for: supplied, else pinned.
+  String? get hubKey => _hubKey ?? pins.get(target);
+
+  /// Clears the pinned hub key; the next connect learns it again (v0).
+  void forgetHubKey() {
+    _hubKey = null;
+    pins.forget(target);
+  }
 
   /// Profile sent on connect (only if name/icon were provided).
   Profile? profile;
@@ -140,17 +174,27 @@ class Service {
     _sender = channel.connect(
       address!,
       options: ClientOptions<Object?>(
-        headers: _authHeaders,
+        headers: authHeaders,
         onConnect: _sendUpdates,
       ),
     );
     return this;
   }
 
-  /// Auth headers for hub-pro: a fresh signed token + protocol version.
-  Future<Map<String, String>> _authHeaders() async {
-    final token = await sign();
-    return <String, String>{'auth': token, 'v': '0'};
+  /// Disconnects from the hub and stops reconnecting.
+  void stop() {
+    _sender?.stop();
+    _sender = null;
+  }
+
+  /// Auth headers for the next connect: a fresh token and `v`. A refused v1
+  /// connect (the hub key changed or a different server answers) keeps
+  /// retrying with v1; there is no silent v0 fallback.
+  Future<Map<String, String>> authHeaders() async {
+    final hubSign = _hubSign;
+    final hubKey = hubSign != null ? this.hubKey : null;
+    final token = hubSign != null ? await hubSign(hubKey) : await sign();
+    return <String, String>{'auth': token, 'v': hubKey != null ? '1' : '0'};
   }
 
   /// Calls an API through the hub (client side). Throws a [StateError] if
@@ -288,6 +332,36 @@ class Service {
     try {
       unawaited(_quietSend(sender, 'hub/service/update', update()));
     } catch (_) {}
+    if (_hubSign != null && hubKey == null) {
+      unawaited(_learnHubKey(sender));
+    }
+  }
+
+  /// Pins the hub key from hub/info, then reconnects with v1 at once. The
+  /// client's socket is private, so the reconnect is a fresh connection; a
+  /// call in flight at that moment fails with `disconnected`. hub-lite
+  /// doesn't answer hub/info, so the service stays on v0 there.
+  Future<void> _learnHubKey(Sender<Object?> sender) async {
+    Object? info;
+    try {
+      info = await sender
+          .send<Object?>('hub/info')
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {
+      return;
+    }
+    final key = info is Map ? info['key'] : null;
+    if (key is! String || key.isEmpty || hubKey != null) {
+      return;
+    }
+    pins.set(target, key);
+    final old = _sender;
+    if (old == null) {
+      return;
+    }
+    _sender = null;
+    start();
+    old.stop();
   }
 
   /// Sends a request, swallowing errors (the connection may drop mid-send).

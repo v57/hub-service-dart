@@ -59,10 +59,10 @@ void main() {
     expect(parts[1], await publicKey());
     expect(parts[2], isNotEmpty);
     expect(base64.decode(parts[2]).length, 64);
-    // Expiry is a DECIMAL epoch-seconds string of now + 10 (TS parity).
+    // Expiry is a DECIMAL epoch-seconds string of now + 60 (protocol default).
     expect(parts[3], matches(RegExp(r'^\d+$')));
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    expect(int.parse(parts[3]), closeTo(now + 10, 5));
+    expect(int.parse(parts[3]), closeTo(now + 60, 5));
     expect(await verifyTokenSignature(token), isTrue);
   });
 

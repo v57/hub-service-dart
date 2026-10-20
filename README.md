@@ -87,9 +87,10 @@ final response = await service.send('echo/upper', body: 'hello'); // "HELLO"
 - `post(path, handler, {settings})` / `stream(path, handler, {settings})` — fluent;
   a handler is `(Object? body)` or `(Object? body, Request request)`:
   `request.caller` (`Caller`: `key`, `device` (`id`, `name`), `groups`,
-  `owner`, `via`, `claimed`; null when the hub sends none), `request.hubKey`,
-  `request.context`, `request.path`. The hub fills `context.hub`, so a
-  service can trust it.
+  `owner`, `via`, `claimed`), `request.context` (without `hub`),
+  `request.path`. The caller is null unless `context.hub.hubKey` is the
+  pinned hub key: a hub that predates caller identity may pass a client's
+  `context.hub` through.
 - `app(App)` — register app header + `AppInterface` stream at `header.path`
 - `send(path, {body, context})` — client call through the hub
 - `values(path, {body, context})` — stream call through the hub

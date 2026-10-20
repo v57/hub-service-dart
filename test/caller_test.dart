@@ -60,7 +60,10 @@ void main() {
             'post': await sender.send<Object?>('whoami', body: 'hi', context: context),
             'plain': await sender.send<Object?>('echo', body: 'hi', context: context),
             'stream': await sender.values<Object?>('whoami/values', context: context).toList(),
-            'anonymous': await sender.send<Object?>('whoami', body: 'hi', context: <String, Object?>{}),
+            'anonymous': await sender.send<Object?>('whoami', body: 'hi', context: <String, Object?>{'service': 'x'}),
+            'spoofed': await sender.send<Object?>('whoami', body: 'hi', context: <String, Object?>{
+              'hub': <String, Object?>{...hubContext, 'hubKey': 'OTHER'},
+            }),
           });
         } catch (error) {
           if (!results.isCompleted) {
@@ -76,7 +79,7 @@ void main() {
     )
       ..post('whoami', (Object? body, Request request) {
         final caller = request.caller ?? const Caller();
-        return <Object?>[body, caller.key, caller.owner, request.hubKey];
+        return <Object?>[body, caller.key, caller.owner, request.context.keys.toList()];
       })
       ..post('echo', (Object? body) => body)
       ..stream('whoami/values', (Object? body, Request request) async* {
@@ -85,10 +88,12 @@ void main() {
       ..start();
     try {
       final out = await results.future.timeout(const Duration(seconds: 5));
-      expect(out['post'], <Object?>['hi', (hubContext['caller']! as Map<String, Object?>)['key'], true, hubContext['hubKey']]);
+      expect(out['post'], <Object?>['hi', (hubContext['caller']! as Map<String, Object?>)['key'], true, <Object?>[]]);
       expect(out['plain'], 'hi');
       expect(out['stream'], <Object?>['Mac Studio']);
-      expect(out['anonymous'], <Object?>['hi', null, false, null]);
+      expect(out['anonymous'], <Object?>['hi', null, false, <Object?>['service']]);
+      // A caller is trusted only from the pinned hub.
+      expect(out['spoofed'], <Object?>['hi', null, false, <Object?>[]]);
     } finally {
       service.stop();
       await hub.stop();

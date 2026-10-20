@@ -80,26 +80,26 @@ class Caller {
   }
 }
 
-/// What a two-argument handler gets next to the body: the caller (null when
-/// the hub sent none, e.g. hub-lite), the forwarding hub's key, the full
-/// request context and the called path.
+/// What a two-argument handler gets next to the body: the caller, the
+/// request context without `hub`, and the called path. The caller is null
+/// unless the hub that forwarded the request is the pinned hub: a hub that
+/// predates caller identity may pass a client's context.hub through.
 class Request {
-  const Request({required this.caller, required this.hubKey, required this.context, required this.path});
+  const Request({required this.caller, required this.context, required this.path});
 
-  factory Request.fromContext(Object? context, String path) {
-    final map = context is Map ? context : const <Object?, Object?>{};
-    final hub = map['hub'];
-    final hubKey = hub is Map ? hub['hubKey'] : null;
+  /// [hubKey] is the pinned hub key the caller must come from.
+  factory Request.fromContext(Object? context, String path, String? hubKey) {
+    final map = context is Map ? Map<Object?, Object?>.of(context) : <Object?, Object?>{};
+    final hub = map.remove('hub');
+    final trusted = hub is Map && hubKey != null && hub['hubKey'] == hubKey;
     return Request(
-      caller: hub is Map ? Caller.parse(hub['caller']) : null,
-      hubKey: hubKey is String ? hubKey : null,
+      caller: trusted ? Caller.parse(hub['caller']) : null,
       context: map,
       path: path,
     );
   }
 
   final Caller? caller;
-  final String? hubKey;
   final Map<Object?, Object?> context;
   final String path;
 }

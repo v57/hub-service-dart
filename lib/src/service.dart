@@ -170,12 +170,27 @@ class Service {
   keychain.HubPins get pins =>
       keychain.HubPins('${File(keychain.keyPath()).parent.path}/hubs.json');
 
-  /// The hub key this service signs for: supplied, else pinned.
-  String? get hubKey => _hubKey ?? pins.get(target);
+  /// The hub key this service signs for: supplied, else pinned. The pin is
+  /// read from hubs.json at each connect and kept in memory.
+  String? get hubKey {
+    final supplied = _hubKey;
+    if (supplied != null) {
+      return supplied;
+    }
+    if (!_pinLoaded) {
+      _pinned = pins.get(target);
+      _pinLoaded = true;
+    }
+    return _pinned;
+  }
+
+  String? _pinned;
+  bool _pinLoaded = false;
 
   /// Clears the pinned hub key; the next connect learns it again (v0).
   void forgetHubKey() {
     _hubKey = null;
+    _pinned = null;
     pins.forget(target);
   }
 
@@ -225,6 +240,7 @@ class Service {
   /// connect (the hub key changed or a different server answers) keeps
   /// retrying with v1; there is no silent v0 fallback.
   Future<Map<String, String>> authHeaders() async {
+    _pinLoaded = false; // pick up a pin another process wrote
     final hubSign = _hubSign;
     final hubKey = hubSign != null ? this.hubKey : null;
     final token = hubSign != null ? await hubSign(hubKey) : await sign();
@@ -290,10 +306,10 @@ class Service {
   }
 
   /// Adapts a `(body)` or `(body, request)` handler to a channel one.
-  static R Function(ChannelBody<Object?>) _adapt<R>(Function handler, String kind) {
+  R Function(ChannelBody<Object?>) _adapt<R>(Function handler, String kind) {
     if (handler is R Function(Object?, Request)) {
       return (ChannelBody<Object?> body) =>
-          handler(body.body, Request.fromContext(body.context, body.path));
+          handler(body.body, Request.fromContext(body.context, body.path, hubKey));
     }
     if (handler is R Function(Object?)) {
       return (ChannelBody<Object?> body) => handler(body.body);
@@ -421,6 +437,8 @@ class Service {
       return;
     }
     pins.set(target, key);
+    _pinned = key;
+    _pinLoaded = true;
     final old = _sender;
     if (old == null) {
       return;

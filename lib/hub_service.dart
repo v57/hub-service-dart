@@ -9,6 +9,7 @@
 /// services on disconnect).
 library;
 
+export 'src/device.dart';
 export 'src/keychain.dart';
 export 'src/service.dart';
 export 'src/app.dart';

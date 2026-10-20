@@ -8,18 +8,29 @@ Dart port of [hub-service](https://github.com/v57/hub-service) — connect to a
 your own post/stream API endpoints, register apps, and call API through the hub.
 
 Connects with **hub-pro auth** (a fresh ed25519 keychain token as the `auth`
-header + `v: 0`) on every (re)connect; hub-lite ignores the auth header. The
-wire contract matches the TS reference (`hub/profile/update`,
-`hub/service/update`, AppInterface + element DSL).
+header) on every (re)connect; hub-lite ignores the auth header. The wire
+contract matches the TS reference (`hub/profile/update`, `hub/service/update`,
+AppInterface + element DSL). Auth and devices follow
+[`Docs/Devices/protocol.md`](../../Docs/Devices/protocol.md).
 
 ## hub-pro auth (keychain)
 
 The keychain (`lib/src/keychain.dart`, TS `keychain.ts` parity) loads or
 generates the `auth` key file in the working directory — the base64 of the
 48-byte PKCS8 DER ed25519 private key followed by the 44-byte SPKI DER public
-key. `sign()` returns a fresh `key.<pub>.<sig>.<expiry>` token (signature over
-the decimal expiry string), attached as the `auth` header on every connect.
-Override the key path with the `HUBKEY` env var or `setKeyPath(...)`.
+key. `sign()` returns a fresh `key.<pub>.<sig>.<expiry>` token, attached as
+the `auth` header on every connect. Override the key path with the `HUBKEY`
+env var or `setKeyPath(...)`.
+
+- **Hub key:** the first connect uses `v: 0` and calls `hub/info`; the hub key
+  is pinned in `hubs.json` beside the `auth` file and later connects sign
+  `hub1:<hub key>:<expiry>` with `v: 1`. hub-lite stays on v0. `hubKey:`
+  supplies it up front and `forgetHubKey()` clears the pin.
+- **Device:** a certificate signed by `~/.hub/device.key` (`HUB_DEVICE_KEY`
+  overrides it) goes in the `device` header and is renewed with less than a
+  day left. `instance:` sets the instance name and `device: false` turns
+  device mode off; `Device(path:, key:, name:, platform:, parent:)` overrides
+  the defaults.
 
 ## Install
 
@@ -65,11 +76,12 @@ final response = await service.send('echo/upper', body: 'hello'); // "HELLO"
 
 ## API
 
-- `Service({address, name, icon, sign})` — address is a port (int) or ws://
-  URL; default `1997` or `HUB` env; `sign` overrides the auth token factory
-  (default: keychain `auth` file in the cwd)
-- `sign([expires])` / `publicKey()` — keychain: fresh `key.<pub>.<sig>.<expiry>`
-  token / the service's SPKI public key (base64)
+- `Service({address, name, icon, sign, hubSign, hubKey, instance, device})` —
+  address is a port (int) or ws:// URL; default `1997` or `HUB` env; `sign`
+  overrides the auth token factory with a v0 one, `hubSign` with one that
+  gets the hub key (default: keychain `auth` file in the cwd)
+- `sign([expires, hubKey])` / `publicKey()` — keychain: fresh
+  `key.<pub>.<sig>.<expiry>` token / the service's SPKI public key (base64)
 - `setKeyPath(path)` — override the auth key file location (`HUBKEY` env also
   works; default `auth` in the cwd)
 - `post(path, handler, {settings})` / `stream(path, handler, {settings})` — fluent
@@ -78,6 +90,7 @@ final response = await service.send('echo/upper', body: 'hello'); // "HELLO"
 - `values(path, {body, context})` — stream call through the hub
 - `start()` — connect with a fresh `auth` header; re-sends
   `hub/profile/update` then `hub/service/update` on every (re)connect
+- `stop()` — disconnect and stop reconnecting
 
 `ApiSettings` carries `Permissions` (group auto-filled from the first path
 segment, TS parity) and `Limit` — wire-parity fields that hub-lite ignores.

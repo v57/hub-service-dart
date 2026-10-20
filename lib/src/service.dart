@@ -15,6 +15,7 @@ import 'dart:io';
 import 'package:channel_dart/client.dart';
 
 import 'app.dart';
+import 'device.dart';
 import 'keychain.dart' as keychain;
 
 /// Profile sent to the hub as hub/profile/update on connect (only if set).
@@ -91,7 +92,11 @@ class Service {
   /// gets the pinned hub key, or null, and must sign v1 when it is set.
   /// Without either, the keychain `auth` file signs. [hubKey] is the hub's
   /// key when known up front; otherwise it is learned from hub/info and
-  /// pinned.
+  /// pinned. [instance] is this service's name on its device, unique per
+  /// device (default: [name], else the first segment of the first registered
+  /// path, else `service`). [device] is `true` (the default: certify the
+  /// service with this device's key when it can be read or created), `false`
+  /// (no `device` header) or a [Device].
   Service({
     Object? address,
     String? name,
@@ -99,6 +104,8 @@ class Service {
     FutureOr<String> Function()? sign,
     FutureOr<String> Function(String? hubKey)? hubSign,
     String? hubKey,
+    String? instance,
+    Object device = true,
   }) {
     final env = Platform.environment['HUB'];
     final envAddress = (env != null && env.isNotEmpty) ? (int.tryParse(env) ?? env) : null;
@@ -107,6 +114,8 @@ class Service {
     _hubSign = hubSign ??
         (sign == null ? (String? hubKey) => keychain.sign(60, hubKey) : null);
     _hubKey = hubKey;
+    _instance = instance;
+    this.device = device is Device ? device : (device == true ? Device() : null);
     if (name != null || icon != null) {
       profile = Profile(name: name, icon: icon);
     }
@@ -128,6 +137,24 @@ class Service {
   FutureOr<String> Function(String? hubKey)? _hubSign;
 
   String? _hubKey;
+
+  String? _instance;
+
+  /// The device that certifies this service; null with device mode off.
+  late final Device? device;
+
+  /// The instance name sent in the certificate.
+  String get instance {
+    final configured = _instance;
+    if (configured != null && configured.isNotEmpty) {
+      return configured;
+    }
+    final name = profile?.name;
+    if (name != null && name.isNotEmpty) {
+      return name;
+    }
+    return _paths.isEmpty ? 'service' : _paths.first.split('/').first;
+  }
 
   /// The hubs.json pin key for this hub.
   String get target => keychain.pinAddress(address!);
@@ -194,7 +221,17 @@ class Service {
     final hubSign = _hubSign;
     final hubKey = hubSign != null ? this.hubKey : null;
     final token = hubSign != null ? await hubSign(hubKey) : await sign();
-    return <String, String>{'auth': token, 'v': hubKey != null ? '1' : '0'};
+    final headers = <String, String>{'auth': token, 'v': hubKey != null ? '1' : '0'};
+    final device = this.device;
+    if (device != null) {
+      try {
+        // The certificate names the key in the token, whoever signed it.
+        headers['device'] = await device.certificate(token.split('.')[1], instance);
+      } catch (_) {
+        // No readable or creatable device key: a plain key connection.
+      }
+    }
+    return headers;
   }
 
   /// Calls an API through the hub (client side). Throws a [StateError] if

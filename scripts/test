@@ -3,5 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Keep every test off the real ~/.hub/device.key.
+device_dir="$(mktemp -d)"
+trap 'rm -rf "$device_dir"' EXIT
+export HUB_DEVICE_KEY="$device_dir/device.key"
+
 dart analyze
 dart test -r expanded

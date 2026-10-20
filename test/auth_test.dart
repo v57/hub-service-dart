@@ -59,24 +59,24 @@ void main() {
     expect(pinAddress('1997'), 'ws://localhost:1997');
     expect(pinAddress('WS://Hub.Example.COM:2000/'), 'ws://hub.example.com:2000');
     expect(pinAddress('wss://hub.example.com/Path/'), 'wss://hub.example.com/Path');
-    expect(Service(address: 1997).target, 'ws://localhost:1997');
+    expect(Service(address: 1997, device: false).target, 'ws://localhost:1997');
   });
 
   test('a supplied hub key connects with v1', () async {
-    final headers = await Service(address: 1, hubKey: fakeHubKey).authHeaders();
+    final headers = await Service(address: 1, hubKey: fakeHubKey, device: false).authHeaders();
     expect(headers['v'], '1');
     final auth = headers['auth']!;
     expect(await verify(auth, 'hub1:$fakeHubKey:${auth.split('.')[3]}'), isTrue);
   });
 
   test('a plain sign factory stays on v0', () async {
-    final service = Service(address: 1, hubKey: fakeHubKey, sign: () => sign());
+    final service = Service(address: 1, hubKey: fakeHubKey, sign: () => sign(), device: false);
     expect((await service.authHeaders())['v'], '0');
   });
 
   test('learns and pins the hub key, then reconnects with v1', () async {
     final hub = await FakeHub.start();
-    final service = Service(address: hub.port)..start();
+    final service = Service(address: hub.port, device: Device(path: '${dir.path}/device.key'))..start();
     try {
       await hub.waitConnects(2);
       expect(hub.connects[0]['v'], '0');
@@ -94,7 +94,7 @@ void main() {
 
   test('hub-lite keeps v0', () async {
     final hub = await FakeHub.start(lite: true);
-    final service = Service(address: hub.port)..start();
+    final service = Service(address: hub.port, device: Device(path: '${dir.path}/device.key'))..start();
     try {
       await hub.waitConnects(1);
       await Future<void>.delayed(const Duration(milliseconds: 300));

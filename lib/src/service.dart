@@ -357,9 +357,14 @@ class Service {
   /// callback before attaching its socket.listen message loop, so awaiting a
   /// send (which waits for the hub's response) inside onConnect would
   /// deadlock — the response could never be read and the service update would
-  /// never be sent. The socket write happens synchronously in send(), so
-  /// scheduling both sends as unawaited futures is safe.
+  /// never be sent. The sends also wait for the next event-loop turn: right
+  /// after onOpen the client re-sends every pending request, and requests
+  /// made inside onConnect would go out twice.
   void _sendUpdates(Sender<Object?> sender) {
+    Timer.run(() => _announce(sender));
+  }
+
+  void _announce(Sender<Object?> sender) {
     try {
       final profile = this.profile;
       if (profile != null) {

@@ -16,6 +16,7 @@ import 'package:channel_dart/client.dart';
 
 import 'app.dart';
 import 'device.dart';
+import 'request.dart';
 import 'keychain.dart' as keychain;
 
 /// Profile sent to the hub as hub/profile/update on connect (only if set).
@@ -252,33 +253,50 @@ class Service {
 
   /// Registers a request/response API endpoint.
   ///
-  /// [handler] receives the request body (may be sync or async) and returns
+  /// [handler] is `(Object? body)` or `(Object? body, Request request)`
+  /// (`request.caller`: who is calling); it may be sync or async and returns
   /// the response body.
   Service post(
     String path,
-    FutureOr<Object?> Function(Object? body) handler, {
+    Function handler, {
     ApiSettings? settings,
   }) {
+    final call = _adapt<FutureOr<Object?>>(handler, 'post');
     _addPath(path, settings);
-    channel.post(path, (ChannelBody<Object?> body) => handler(body.body));
+    channel.post(path, call);
     return this;
   }
 
   /// Registers a streaming API endpoint.
   ///
-  /// [handler] receives the request body and returns the stream of values
-  /// to stream back (an async generator works too).
+  /// [handler] is `(Object? body)` or `(Object? body, Request request)` and
+  /// returns the stream of values to stream back (an async generator works
+  /// too).
   Service stream(
     String path,
-    FutureOr<Stream<Object?>> Function(Object? body) handler, {
+    Function handler, {
     ApiSettings? settings,
   }) {
+    final call = _adapt<FutureOr<Stream<Object?>>>(handler, 'stream');
     _addPath(path, settings);
-    channel.stream(
-      path,
-      (ChannelBody<Object?> body) => handler(body.body),
-    );
+    channel.stream(path, call);
     return this;
+  }
+
+  /// Adapts a `(body)` or `(body, request)` handler to a channel one.
+  static R Function(ChannelBody<Object?>) _adapt<R>(Function handler, String kind) {
+    if (handler is R Function(Object?, Request)) {
+      return (ChannelBody<Object?> body) =>
+          handler(body.body, Request.fromContext(body.context, body.path));
+    }
+    if (handler is R Function(Object?)) {
+      return (ChannelBody<Object?> body) => handler(body.body);
+    }
+    throw ArgumentError.value(
+      handler,
+      'handler',
+      'a $kind handler takes (Object? body) or (Object? body, Request request)',
+    );
   }
 
   /// Registers an app: its header goes to the hub apps list and its path

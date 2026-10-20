@@ -84,7 +84,12 @@ final response = await service.send('echo/upper', body: 'hello'); // "HELLO"
   `key.<pub>.<sig>.<expiry>` token / the service's SPKI public key (base64)
 - `setKeyPath(path)` — override the auth key file location (`HUBKEY` env also
   works; default `auth` in the cwd)
-- `post(path, handler, {settings})` / `stream(path, handler, {settings})` — fluent
+- `post(path, handler, {settings})` / `stream(path, handler, {settings})` — fluent;
+  a handler is `(Object? body)` or `(Object? body, Request request)`:
+  `request.caller` (`Caller`: `key`, `device` (`id`, `name`), `groups`,
+  `owner`, `via`, `claimed`; null when the hub sends none), `request.hubKey`,
+  `request.context`, `request.path`. The hub fills `context.hub`, so a
+  service can trust it.
 - `app(App)` — register app header + `AppInterface` stream at `header.path`
 - `send(path, {body, context})` — client call through the hub
 - `values(path, {body, context})` — stream call through the hub

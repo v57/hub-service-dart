@@ -11,5 +11,6 @@ library;
 
 export 'src/device.dart';
 export 'src/keychain.dart';
+export 'src/request.dart';
 export 'src/service.dart';
 export 'src/app.dart';

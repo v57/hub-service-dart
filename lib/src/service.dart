@@ -1,6 +1,6 @@
 /// Core hub-service types (TS service.ts parity).
 ///
-/// Port of hub-service (TS reference). Connects with hub-pro auth (a fresh
+/// Port of hub-service (TS reference). Connects with hub-server auth (a fresh
 /// ed25519 keychain token as the `auth` header) on every (re)connect;
 /// hub-lite ignores the auth header entirely. The wire contract matches the
 /// TS/Go reference — hub/profile/update and hub/service/update are re-sent on
@@ -132,7 +132,7 @@ class Service {
   /// Hub address: a port (int) or a ws:// URL (String).
   late Object? address;
 
-  /// Token factory for hub-pro auth: called fresh on every (re)connect and
+  /// Token factory for hub-server auth: called fresh on every (re)connect and
   /// attached as the `auth` header (with `v: '0'`) when no hub-aware signer
   /// is set. Defaults to the keychain `auth` file in the cwd (TS parity).
   /// hub-lite ignores the header.
@@ -302,7 +302,7 @@ class Service {
   /// Connects to the hub. On every (re)connect sends hub/profile/update (if a
   /// profile is set) and hub/service/update with the current services+apps —
   /// the hub drops services on disconnect. Attaches a fresh keychain auth
-  /// token as the `auth` header on every (re)connect (hub-pro; hub-lite
+  /// token as the `auth` header on every (re)connect (hub-server; hub-lite
   /// ignores it). No-op if already started.
   Service start() {
     if (_sender != null) {

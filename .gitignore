@@ -3,7 +3,7 @@ build/
 coverage/
 .DS_Store
 *.iml
-# hub-pro ed25519 key file (never commit private keys)
+# hub-server ed25519 key file (never commit private keys)
 auth
 auth.*
 CLAUDE.md

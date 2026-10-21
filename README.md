@@ -7,13 +7,13 @@ Dart port of [hub-service](https://github.com/v57/hub-service) — connect to a
 [hub](https://github.com/v57/hub-lite) (default `ws://127.0.0.1:1997`), host
 your own post/stream API endpoints, register apps, and call API through the hub.
 
-Connects with **hub-pro auth** (a fresh ed25519 keychain token as the `auth`
+Connects with **hub-server auth** (a fresh ed25519 keychain token as the `auth`
 header) on every (re)connect; hub-lite ignores the auth header. The wire
 contract matches the TS reference (`hub/profile/update`, `hub/service/update`,
 AppInterface + element DSL). Auth and devices follow
 [`Docs/Devices/protocol.md`](../../Docs/Devices/protocol.md).
 
-## hub-pro auth (keychain)
+## hub-server auth (keychain)
 
 The keychain (`lib/src/keychain.dart`, TS `keychain.ts` parity) loads or
 generates the `auth` key file in the working directory — the base64 of the

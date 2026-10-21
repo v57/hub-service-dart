@@ -15,6 +15,9 @@ class FakeHub {
   final ChannelServer<Object?> server;
   final List<Map<String, String>> connects = <Map<String, String>>[];
 
+  /// network/shares/replace bodies received.
+  final List<Map<String, Object?>> replaced = <Map<String, Object?>>[];
+
   int get port => server.httpServer.port;
 
   static Future<FakeHub> start({
@@ -35,6 +38,24 @@ class FakeHub {
       );
     }
     channel.post('hub/profile/update', (ChannelBody<Object?> _) => null);
+    channel.post('network/shares/replace', (ChannelBody<Object?> body) {
+      final request = Map<String, Object?>.from(body.body! as Map);
+      hub.replaced.add(request);
+      return <String, Object?>{
+        'shares': <Object?>[
+          for (final share in request['shares']! as List)
+            <String, Object?>{
+              'version': 1,
+              'resourceId': 'hnr1_${share['name']}',
+              'authority': '${share['name']}.hub.invalid',
+              'providerId': 'provider',
+              'protocol': share['protocol'],
+              'overlayAddress': '100.96.0.2',
+              'port': (share['target'] as Map)['port'],
+            },
+        ],
+      };
+    });
     channel.post('hub/service/update', (ChannelBody<Object?> body) {
       if (onUpdate != null) {
         scheduleMicrotask(() => onUpdate(body.sender));

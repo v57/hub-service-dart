@@ -16,6 +16,7 @@ import 'package:channel_dart/client.dart';
 
 import 'app.dart';
 import 'device.dart';
+import 'network.dart';
 import 'request.dart';
 import 'keychain.dart' as keychain;
 
@@ -95,7 +96,8 @@ class Service {
   /// key when known up front; otherwise it is learned from hub/info and
   /// pinned. [instance] is this service's name on its device, unique per
   /// device (default: `HUB_INSTANCE`, else [name], else the cwd name, else
-  /// `service`). [device] is `true` (the default: certify the
+  /// `service`). [signChallenge] signs Hub Network agent challenges with the
+  /// service key (default: the keychain `auth` file). [device] is `true` (the default: certify the
   /// service with this device's key when it can be read or created), `false`
   /// (no `device` header) or a [Device].
   Service({
@@ -107,6 +109,7 @@ class Service {
     String? hubKey,
     String? instance,
     Object device = true,
+    ChallengeSigner? signChallenge,
   }) {
     final env = Platform.environment['HUB'];
     final envAddress = (env != null && env.isNotEmpty) ? (int.tryParse(env) ?? env) : null;
@@ -117,6 +120,7 @@ class Service {
     _hubKey = hubKey;
     _instance = instance;
     this.device = device is Device ? device : (device == true ? Device() : null);
+    this.signChallenge = signChallenge ?? keychain.signChallenge;
     if (name != null || icon != null) {
       profile = Profile(name: name, icon: icon);
     }
@@ -140,6 +144,90 @@ class Service {
   String? _hubKey;
 
   String? _instance;
+
+  /// Signs Hub Network agent challenges with the service key.
+  late final ChallengeSigner signChallenge;
+
+  /// Hub Network shares; the agent socket is `network.agentSocket`.
+  final NetworkPublisher network = NetworkPublisher();
+
+  String? _serviceKey;
+
+  /// The key this service connects with (the key in its auth token).
+  Future<String> serviceKey() async => _serviceKey ?? await keychain.publicKey();
+
+  /// Declares a Hub Network share before [start]: the declared set is
+  /// published on connect and after every reconnect. Default policy: private.
+  Service share(String name, String protocol, String host, int port, [Map<String, Object?>? policy]) {
+    network.declareShare(_share(name, protocol, host, port, policy));
+    return this;
+  }
+
+  /// Publishes a local TCP/UDP port through Hub Network; returns every
+  /// publication (`resourceId`, `authority`, `overlayAddress`, `port`, ...).
+  Future<List<Map<String, Object?>>> publishShare(
+    String name,
+    String protocol,
+    String host,
+    int port, [
+    Map<String, Object?>? policy,
+  ]) async =>
+      network.publishShare(
+        _share(name, protocol, host, port, policy),
+        await serviceKey(),
+        signChallenge,
+        _senderOrError(),
+      );
+
+  /// Changes a share's policy or target port and republishes it.
+  Future<List<Map<String, Object?>>> updateShare(
+    String name, {
+    Map<String, Object?>? policy,
+    int? port,
+  }) async {
+    final current = network.declaredShares.where((Map<String, Object?> s) => s['name'] == name);
+    if (current.isEmpty) {
+      throw StateError("Share '$name' not found");
+    }
+    final updated = Map<String, Object?>.of(current.first);
+    if (policy != null) {
+      updated['policy'] = policy;
+    }
+    if (port != null) {
+      updated['target'] = <String, Object?>{...updated['target']! as Map<String, Object?>, 'port': port};
+    }
+    return network.publishShare(updated, await serviceKey(), signChallenge, _senderOrError());
+  }
+
+  /// Removes a share from Hub Network.
+  Future<List<Map<String, Object?>>> removeShare(String name) async =>
+      network.removeShare(name, await serviceKey(), signChallenge, _senderOrError());
+
+  List<Map<String, Object?>> get sharePublications => network.publications;
+
+  Map<String, Object?>? sharePublication(String name) => network.publication(name);
+
+  static Map<String, Object?> _share(
+    String name,
+    String protocol,
+    String host,
+    int port,
+    Map<String, Object?>? policy,
+  ) =>
+      <String, Object?>{
+        'name': name,
+        'protocol': protocol,
+        'target': <String, Object?>{'host': host, 'port': port},
+        'policy': policy ?? <String, Object?>{'mode': 'private'},
+      };
+
+  Future<void> _republish(Sender<Object?> sender) async {
+    try {
+      await network.republishAll(await serviceKey(), signChallenge, sender);
+    } catch (error) {
+      stderr.writeln('Failed to republish network shares: $error');
+    }
+  }
 
   /// The device that certifies this service; null with device mode off.
   late final Device? device;
@@ -245,6 +333,7 @@ class Service {
     final hubKey = hubSign != null ? this.hubKey : null;
     final token = hubSign != null ? await hubSign(hubKey) : await sign();
     final headers = <String, String>{'auth': token, 'v': hubKey != null ? '1' : '0'};
+    _serviceKey = token.split('.')[1];
     final device = this.device;
     if (device != null) {
       try {
@@ -414,6 +503,9 @@ class Service {
     try {
       unawaited(_quietSend(sender, 'hub/service/update', update()));
     } catch (_) {}
+    if (network.hasShares) {
+      unawaited(_republish(sender));
+    }
     if (_hubSign != null && hubKey == null) {
       unawaited(_learnHubKey(sender));
     }

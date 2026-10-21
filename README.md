@@ -101,6 +101,25 @@ final response = await service.send('echo/upper', body: 'hello'); // "HELLO"
 `ApiSettings` carries `Permissions` (group auto-filled from the first path
 segment, TS parity) and `Limit` — wire-parity fields that hub-lite ignores.
 
+## Hub Network shares
+
+A share makes a local TCP/UDP port reachable through Hub Network (TS
+`publishShare` parity). The local hub-net agent attests each share over its
+Unix socket (`/var/run/hub-net/agent.sock`, `service.network.agentSocket`),
+then the declared set goes to the hub in one `network/shares/replace`, and it
+is republished after every reconnect.
+
+```dart
+service.share('s3', 'tcp', '127.0.0.1', 9001, {'mode': 'hub'}); // before start()
+await service.publishShare('ssh', 'tcp', '127.0.0.1', 22);     // after start()
+await service.updateShare('ssh', port: 2222);
+await service.removeShare('ssh');
+service.sharePublication('s3'); // resourceId, authority, overlayAddress, port, ...
+```
+
+The default policy is `{'mode': 'private'}`; others are `hub`, `group`
+(`group`), `keys` (`keys`) and `disabled`.
+
 ## Test
 
 ```bash

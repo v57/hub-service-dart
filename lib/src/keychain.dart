@@ -203,6 +203,13 @@ Future<String> signData(Uint8List keyFile, String data) async {
   return base64.encode(signature.bytes);
 }
 
+/// The base64 signature of [data] with the service key (agent challenges for
+/// Hub Network shares).
+Future<String> signChallenge(String data) async {
+  await _loadOrGenerate();
+  return signData(_keyData!, data);
+}
+
 /// An auth token for an exact expiry from key file bytes; v1 (hub-bound)
 /// when [hubKey] is set.
 Future<String> token(Uint8List keyFile, int expiry, {String? hubKey}) async {

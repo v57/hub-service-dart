@@ -11,6 +11,7 @@ library;
 
 export 'src/device.dart' hide truncateUtf8;
 export 'src/keychain.dart';
+export 'src/network.dart';
 export 'src/request.dart';
 export 'src/service.dart';
 export 'src/app.dart';

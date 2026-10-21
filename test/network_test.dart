@@ -123,7 +123,7 @@ void main() {
       ..share('s3', 'tcp', '127.0.0.1', 9001, <String, Object?>{'mode': 'hub'})
       ..start();
     try {
-      for (var i = 0; i < 100 && hub.replaced.isEmpty; i++) {
+      for (var i = 0; i < 100 && service.sharePublication('s3') == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 20));
       }
       final wire = (hub.replaced.first['shares']! as List).first as Map;

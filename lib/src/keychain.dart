@@ -5,19 +5,18 @@
 /// - The key file (`auth` in the working directory, matching the TS keychain)
 ///   is the base64 encoding of the 48-byte PKCS8 DER private key followed by
 ///   the 44-byte SPKI DER public key (92 bytes total, 124 base64 chars).
-/// - A signed token has the shape `key.<pub>.<sig>.<expiry>` where:
+/// - A signed token has the shape `key.<pub>.<sig>.<expiry>.<nonce>` where:
 ///     pub     = base64 of the 44-byte SPKI public key (bytes 48..92 of the
 ///               file)
-///     sig     = base64 ed25519 signature over the signed data
-///     expiry  = DECIMAL epoch-seconds string of now + 60 (protocol default;
-///               hub-server rejects it once expired or over 5 minutes ahead)
-/// - The signed data depends on the `v` header (Docs/Devices/protocol.md):
-///     v: 0    the expiry string alone
-///     v: 1    `hub1:<hub key>:<expiry>`, so the token only works on the hub
-///             whose key it names
+///     sig     = base64 ed25519 signature of `hub1:<hub key>:<nonce>:<expiry>`
+///     expiry  = DECIMAL epoch-seconds string of now + 30 (protocol default;
+///               hub-server rejects it once expired or over a minute ahead)
+///     nonce   = the challenge the hub answered in `hub/info`, so the token
+///               works once, on the hub whose key it names
+///               (Docs/Devices/protocol.md section 2)
 /// - The hub verifies the signature against the embedded public key and treats
 ///   the key as the connection identity (owner/host/group permissions).
-/// - Hub keys learned from `hub/info` are pinned in `hubs.json` beside the key
+/// - Hub keys proved in `hub/info` are pinned in `hubs.json` beside the key
 ///   file: `{"<address>": "<hub SPKI>"}` (see [HubPins]).
 ///
 /// Usage:
@@ -25,8 +24,7 @@
 /// ```dart
 /// import 'package:hub_service/hub_service.dart';
 ///
-/// final token = await sign();                    // v0 token for a connect
-/// final token = await sign(60, hubKey);          // v1 token bound to one hub
+/// final token = await sign(hubKey, challenge);   // a token for one connect to one hub
 /// final pub = await publicKey();                 // the service's public key
 /// ```
 library;
@@ -37,6 +35,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+
+/// Sent as the `v` header next to `auth`.
+const String authVersion = '1';
 
 /// PKCS8 DER private key length for ed25519 (the first 16 bytes are the
 /// PKCS8 header, the remaining 32 are the raw seed).
@@ -210,11 +211,11 @@ Future<String> signChallenge(String data) async {
   return signData(_keyData!, data);
 }
 
-/// An auth token for an exact expiry from key file bytes; v1 (hub-bound)
-/// when [hubKey] is set.
-Future<String> token(Uint8List keyFile, int expiry, {String? hubKey}) async {
-  final data = hubKey != null && hubKey.isNotEmpty ? 'hub1:$hubKey:$expiry' : '$expiry';
-  return 'key.${spkiOf(keyFile)}.${await signData(keyFile, data)}.$expiry';
+/// An auth token for an exact expiry, one hub and one challenge, from key file
+/// bytes.
+Future<String> token(Uint8List keyFile, int expiry, String hubKey, String nonce) async {
+  final signature = await signData(keyFile, 'hub1:$hubKey:$nonce:$expiry');
+  return 'key.${spkiOf(keyFile)}.$signature.$expiry.$nonce';
 }
 
 /// The hubs.json key for a hub address: a bare port is
@@ -292,12 +293,10 @@ Future<String> publicKey() async {
   );
 }
 
-/// A fresh auth token: `key.<pub>.<sig>.<expiry>`.
-///
-/// With [hubKey] (the pinned hub key) it signs `hub1:<hub key>:<expiry>` for
-/// `v: 1`; without it the token is v0, the DECIMAL expiry string alone.
-Future<String> sign([int expires = 60, String? hubKey]) async {
+/// A fresh auth token for one connection to the hub with key [hubKey], over
+/// the challenge it answered in `hub/info`.
+Future<String> sign(String hubKey, String nonce, [int expires = 30]) async {
   await _loadOrGenerate();
   final expiry = DateTime.now().millisecondsSinceEpoch ~/ 1000 + expires;
-  return token(_keyData!, expiry, hubKey: hubKey);
+  return token(_keyData!, expiry, hubKey, nonce);
 }

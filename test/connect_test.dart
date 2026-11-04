@@ -4,6 +4,8 @@ import 'package:channel_dart/server.dart';
 import 'package:hub_service/hub_service.dart';
 import 'package:test/test.dart';
 
+import 'support/fake_hub.dart';
+
 void main() {
   test('each connect sends the profile and service updates once', () async {
     final dir = await Directory.systemTemp.createTemp('hubconnect-dart-');
@@ -18,6 +20,7 @@ void main() {
         paths.add(body.path);
         return null;
       });
+    answerHubInfo(channel);
     final server = await channel.listen(0);
     final service = Service(address: server.httpServer.port, name: 'Echo', device: false)
       ..post('echo', (Object? body) => body)

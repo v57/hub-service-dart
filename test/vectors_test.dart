@@ -42,9 +42,8 @@ void main() {
   test('auth tokens', () async {
     final auth = section('auth');
     final expiry = auth['expiry']! as int;
-    expect(await token(key('service'), expiry), field(auth['v0']! as Map<String, Object?>, 'header'));
     expect(
-      await token(key('service'), expiry, hubKey: field(keyVector('hub'), 'publicKey')),
+      await token(key('service'), expiry, field(keyVector('hub'), 'publicKey'), field(auth, 'nonce')),
       field(auth['v1']! as Map<String, Object?>, 'header'),
     );
   });

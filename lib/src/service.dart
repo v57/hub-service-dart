@@ -1,12 +1,10 @@
 /// Core hub-service types (TS service.ts parity).
 ///
-/// Port of hub-service (TS reference). Connects with hub-server auth (a fresh
-/// ed25519 keychain token as the `auth` header) on every (re)connect;
-/// hub-lite ignores the auth header entirely. The wire contract matches the
-/// TS/Go reference — hub/profile/update and hub/service/update are re-sent on
-/// every (re)connect (the hub drops services on disconnect). Auth follows
-/// Docs/Devices/protocol.md: v0 tokens until the hub key is pinned from
-/// hub/info, hub-bound v1 tokens after that.
+/// Port of hub-service (TS reference). The wire contract matches the TS/Go
+/// reference — hub/profile/update and hub/service/update are re-sent on every
+/// (re)connect (the hub drops services on disconnect). Auth follows
+/// Docs/Devices/protocol.md section 2: every (re)connect asks the hub to prove
+/// its key and sends a fresh token for that answer alone (see hub_proof.dart).
 library;
 
 import 'dart:async';
@@ -16,9 +14,16 @@ import 'package:channel_dart/client.dart';
 
 import 'app.dart';
 import 'device.dart';
+import 'hub_proof.dart';
 import 'network.dart';
 import 'request.dart';
 import 'keychain.dart' as keychain;
+
+/// First wait for a hub that doesn't prove its key, or can't be reached.
+const Duration _handshakeRetry = Duration(seconds: 1);
+
+/// Longest such wait.
+const Duration _handshakeMaxRetry = Duration(seconds: 30);
 
 /// Profile sent to the hub as hub/profile/update on connect (only if set).
 class Profile {
@@ -90,11 +95,13 @@ class ApiSettings {
 ///   ..start();
 /// ```
 class Service {
-  /// [sign] is a v0 token factory (it can't sign for a hub key); [hubSign]
-  /// gets the pinned hub key, or null, and must sign v1 when it is set.
-  /// Without either, the keychain `auth` file signs. [hubKey] is the hub's
-  /// key when known up front; otherwise it is learned from hub/info and
-  /// pinned. [instance] is this service's name on its device, unique per
+  /// [sign] is a custom token factory: it gets the key the hub proved and the
+  /// challenge of this connect, and runs only after the proof. Without it, the
+  /// keychain `auth` file signs. [hubKey] is the hub's key when known up front;
+  /// otherwise the first key a hub proves is pinned. [allowPlaintext] dials
+  /// plain ws:// beyond loopback, the overlay and the LAN, which would carry
+  /// the key unencrypted: for private networks the SDK can't recognize, such as
+  /// a container's ws://hub:1997 (also `HUB_ALLOW_PLAINTEXT=1`). [instance] is this service's name on its device, unique per
   /// device (default: `HUB_INSTANCE`, else [name], else the cwd name, else
   /// `service`). [signChallenge] signs Hub Network agent challenges with the
   /// service key (default: the keychain `auth` file). [device] is `true` (the default: certify the
@@ -104,9 +111,9 @@ class Service {
     Object? address,
     String? name,
     Object? icon,
-    FutureOr<String> Function()? sign,
-    FutureOr<String> Function(String? hubKey)? hubSign,
+    FutureOr<String> Function(String hubKey, String challenge)? sign,
     String? hubKey,
+    bool allowPlaintext = false,
     String? instance,
     Object device = true,
     ChallengeSigner? signChallenge,
@@ -115,9 +122,8 @@ class Service {
     final envAddress = (env != null && env.isNotEmpty) ? (int.tryParse(env) ?? env) : null;
     this.address = address ?? envAddress ?? 1997;
     this.sign = sign ?? keychain.sign;
-    _hubSign = hubSign ??
-        (sign == null ? (String? hubKey) => keychain.sign(60, hubKey) : null);
     _hubKey = hubKey;
+    _allowPlaintext = allowPlaintext || Platform.environment['HUB_ALLOW_PLAINTEXT'] == '1';
     _instance = instance;
     this.device = device is Device ? device : (device == true ? Device() : null);
     this.signChallenge = signChallenge ?? keychain.signChallenge;
@@ -132,16 +138,22 @@ class Service {
   /// Hub address: a port (int) or a ws:// URL (String).
   late Object? address;
 
-  /// Token factory for hub-server auth: called fresh on every (re)connect and
-  /// attached as the `auth` header (with `v: '0'`) when no hub-aware signer
-  /// is set. Defaults to the keychain `auth` file in the cwd (TS parity).
-  /// hub-lite ignores the header.
-  late final FutureOr<String> Function() sign;
-
-  /// Hub-aware token factory: gets the hub key and signs v1 when it is set.
-  FutureOr<String> Function(String? hubKey)? _hubSign;
+  /// Token factory for hub-server auth: called fresh on every (re)connect,
+  /// with the key the hub proved and the challenge of this connect, and
+  /// attached as the `auth` header. Defaults to the keychain `auth` file in the
+  /// cwd (TS parity).
+  late final FutureOr<String> Function(String hubKey, String challenge) sign;
 
   String? _hubKey;
+
+  late final bool _allowPlaintext;
+
+  /// Why the service isn't connected, if it knows: a refused address, or a hub
+  /// that didn't prove its key or answers with another than the pinned one.
+  String? lastError;
+
+  /// Completes on [stop], ending a wait for the hub's proof.
+  Completer<void>? _stopped;
 
   String? _instance;
 
@@ -258,8 +270,9 @@ class Service {
   keychain.HubPins get pins =>
       keychain.HubPins('${File(keychain.keyPath()).parent.path}/hubs.json');
 
-  /// The hub key this service signs for: supplied, else pinned. The pin is
-  /// read from hubs.json at each connect and kept in memory.
+  /// The hub key this service expects: supplied, else pinned, else null until
+  /// a hub proved one. The pin is read from hubs.json at each connect and kept
+  /// in memory.
   String? get hubKey {
     final supplied = _hubKey;
     if (supplied != null) {
@@ -275,7 +288,7 @@ class Service {
   String? _pinned;
   bool _pinLoaded = false;
 
-  /// Clears the pinned hub key; the next connect learns it again (v0).
+  /// Clears the pinned hub key; the next connect pins what the hub proves.
   void forgetHubKey() {
     _hubKey = null;
     _pinned = null;
@@ -301,13 +314,21 @@ class Service {
 
   /// Connects to the hub. On every (re)connect sends hub/profile/update (if a
   /// profile is set) and hub/service/update with the current services+apps —
-  /// the hub drops services on disconnect. Attaches a fresh keychain auth
-  /// token as the `auth` header on every (re)connect (hub-server; hub-lite
-  /// ignores it). No-op if already started.
+  /// the hub drops services on disconnect. Every (re)connect first asks the
+  /// hub to prove its key (see [authHeaders]). A plain ws:// address beyond
+  /// loopback, the overlay and the LAN isn't dialed. No-op if already started.
   Service start() {
     if (_sender != null) {
       return this;
     }
+    lastError = null;
+    if (!_allowPlaintext && hubTransportOf(address!) == HubTransport.refused) {
+      lastError = "$target would carry this service's key unencrypted. Use wss://, "
+          'or set allowPlaintext (HUB_ALLOW_PLAINTEXT=1) on a private network';
+      stderr.writeln('hub-service: $lastError');
+      return this;
+    }
+    _stopped = Completer<void>();
     _sender = channel.connect(
       address!,
       options: ClientOptions<Object?>(
@@ -318,21 +339,90 @@ class Service {
     return this;
   }
 
-  /// Disconnects from the hub and stops reconnecting.
+  /// Disconnects from the hub and stops reconnecting, ending a wait for its
+  /// proof.
   void stop() {
+    final stopped = _stopped;
+    if (stopped != null && !stopped.isCompleted) {
+      stopped.complete();
+    }
+    _stopped = null;
     _sender?.stop();
     _sender = null;
   }
 
-  /// Auth headers for the next connect: a fresh token and `v`. A refused v1
-  /// connect (the hub key changed or a different server answers) keeps
-  /// retrying with v1; there is no silent v0 fallback.
+  /// Runs before every connection attempt (protocol.md section 2). It comes
+  /// back with a token over a fresh challenge from a hub that proved its key;
+  /// until one has, it holds the attempt back, so nothing goes out and requests
+  /// keep waiting. After a [stop] it throws, which tells the client not to
+  /// connect.
   Future<Map<String, String>> authHeaders() async {
+    final stopped = _stopped;
+    var delay = _handshakeRetry;
+    String? reported;
+    while (true) {
+      Map<String, String>? headers;
+      try {
+        headers = await _handshake(stopped?.future);
+      } catch (error) {
+        final message = error is StateError ? error.message : '$error';
+        lastError = message;
+        if (message != reported) {
+          reported = message;
+          stderr.writeln('hub-service: $message');
+        }
+      }
+      if (stopped != null && stopped.isCompleted) {
+        throw StateError('Service stopped');
+      }
+      if (headers != null) {
+        lastError = null;
+        return headers;
+      }
+      await _waitForRetry(delay, stopped);
+      if (stopped != null && stopped.isCompleted) {
+        throw StateError('Service stopped');
+      }
+      delay = delay * 2 < _handshakeMaxRetry ? delay * 2 : _handshakeMaxRetry;
+    }
+  }
+
+  /// Waits for [delay], or until [stopped].
+  Future<void> _waitForRetry(Duration delay, Completer<void>? stopped) {
+    final done = Completer<void>();
+    final timer = Timer(delay, done.complete);
+    unawaited(stopped?.future.then((_) {
+      timer.cancel();
+      if (!done.isCompleted) {
+        done.complete();
+      }
+    }));
+    return done.future;
+  }
+
+  /// Asks the hub for its proof and signs for that answer alone.
+  Future<Map<String, String>> _handshake(Future<void>? cancelled) async {
+    final HubProof proof;
+    try {
+      proof = await askHub(address!, cancelled: cancelled);
+    } catch (error) {
+      final message = error is StateError ? error.message : '$error';
+      throw StateError('$target: $message, sending it nothing');
+    }
     _pinLoaded = false; // pick up a pin another process wrote
-    final hubSign = _hubSign;
-    final hubKey = hubSign != null ? this.hubKey : null;
-    final token = hubSign != null ? await hubSign(hubKey) : await sign();
-    final headers = <String, String>{'auth': token, 'v': hubKey != null ? '1' : '0'};
+    final pinned = hubKey;
+    if (pinned == null) {
+      pins.set(target, proof.key);
+      _pinned = proof.key;
+      _pinLoaded = true;
+    } else if (pinned != proof.key) {
+      throw StateError(
+        '$target answers with key ${proof.key}, not the pinned $pinned, sending it nothing. '
+        'forgetHubKey() if its key really changed',
+      );
+    }
+    final token = await sign(proof.key, proof.challenge);
+    final headers = <String, String>{'auth': token, 'v': keychain.authVersion};
     _serviceKey = token.split('.')[1];
     final device = this.device;
     if (device != null) {
@@ -475,7 +565,7 @@ class Service {
   ClientSender<Object?> _senderOrError() {
     final sender = _sender;
     if (sender == null) {
-      throw StateError('Service not started');
+      throw StateError(lastError ?? 'Service not started');
     }
     return sender;
   }
@@ -506,38 +596,6 @@ class Service {
     if (network.hasShares) {
       unawaited(_republish(sender));
     }
-    if (_hubSign != null && hubKey == null) {
-      unawaited(_learnHubKey(sender));
-    }
-  }
-
-  /// Pins the hub key from hub/info, then reconnects with v1 at once. The
-  /// client's socket is private, so the reconnect is a fresh connection; a
-  /// call in flight at that moment fails with `disconnected`. hub-lite
-  /// doesn't answer hub/info, so the service stays on v0 there.
-  Future<void> _learnHubKey(Sender<Object?> sender) async {
-    Object? info;
-    try {
-      info = await sender
-          .send<Object?>('hub/info')
-          .timeout(const Duration(seconds: 10));
-    } catch (_) {
-      return;
-    }
-    final key = info is Map ? info['key'] : null;
-    if (key is! String || key.isEmpty || hubKey != null) {
-      return;
-    }
-    pins.set(target, key);
-    _pinned = key;
-    _pinLoaded = true;
-    final old = _sender;
-    if (old == null) {
-      return;
-    }
-    _sender = null;
-    start();
-    old.stop();
   }
 
   /// Sends a request, swallowing errors (the connection may drop mid-send).

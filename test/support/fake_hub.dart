@@ -1,13 +1,49 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:channel_dart/server.dart';
+import 'package:hub_service/hub_service.dart';
+
+final Map<String, Object?> vectors = jsonDecode(
+  File('../../Docs/Devices/vectors.json').readAsStringSync(),
+) as Map<String, Object?>;
+
+Map<String, Object?> keyVector(String name) =>
+    (vectors['keys']! as Map<String, Object?>)[name]! as Map<String, Object?>;
 
 /// The hub key fake hubs answer hub/info with.
-const String fakeHubKey =
-    'MCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=';
+final String fakeHubKey = keyVector('hub')['publicKey']! as String;
+
+/// What a hub answers hub/info with.
+typedef HubAnswer = FutureOr<Map<String, Object?>> Function(String nonce, String challenge);
+
+/// An answer that proves the key of a vector key.
+HubAnswer proving([String name = 'hub']) {
+  final vector = keyVector(name);
+  final keyFile = decodeKeyFile(vector['keyFile']! as String);
+  final key = vector['publicKey']! as String;
+  return (String nonce, String challenge) async => <String, Object?>{
+        'key': key,
+        'protocol': 2,
+        'challenge': challenge,
+        'proof': await signData(keyFile, hubInfoSignedData(key, nonce)),
+      };
+}
+
+/// Makes [channel] answer hub/info as [answer] says, default proving the
+/// vectors' hub key, with a fresh challenge per question.
+void answerHubInfo(Channel<Object?> channel, [HubAnswer? answer]) {
+  final respond = answer ?? proving();
+  var asked = 0;
+  channel.post('hub/info', (ChannelBody<Object?> body) {
+    asked += 1;
+    return respond((body.body! as Map)['nonce'] as String, 'challenge-$asked');
+  });
+}
 
 /// An in-process hub that records each connect's headers and answers
-/// hub/info unless [lite]. [onUpdate] runs on every hub/service/update with
+/// hub/info as [answer] says. [onUpdate] runs on every hub/service/update with
 /// the connection's sender (to call the service back).
 class FakeHub {
   FakeHub._(this.server);
@@ -18,26 +54,25 @@ class FakeHub {
   /// network/shares/replace bodies received.
   final List<Map<String, Object?>> replaced = <Map<String, Object?>>[];
 
+  /// hub/service/update calls received.
+  int updates = 0;
+
   int get port => server.httpServer.port;
 
+  /// The connects that carried credentials.
+  List<Map<String, String>> get credentials => connects
+      .where((Map<String, String> headers) => headers.containsKey('auth') || headers.containsKey('device'))
+      .toList();
+
   static Future<FakeHub> start({
-    bool lite = false,
+    HubAnswer? answer,
     void Function(Sender<Object?> sender)? onUpdate,
   }) async {
     late FakeHub hub;
     final channel = Channel<Object?>();
-    if (!lite) {
-      channel.post(
-        'hub/info',
-        (ChannelBody<Object?> _) => <String, Object?>{
-          'key': fakeHubKey,
-          'protocol': 1,
-          'pro': true,
-          'mode': 'default-allow',
-        },
-      );
-    }
+    answerHubInfo(channel, answer);
     channel.post('hub/profile/update', (ChannelBody<Object?> _) => null);
+    channel.post('test/echo', (ChannelBody<Object?> body) => body.body);
     channel.post('network/shares/replace', (ChannelBody<Object?> body) {
       final request = Map<String, Object?>.from(body.body! as Map);
       hub.replaced.add(request);
@@ -57,6 +92,7 @@ class FakeHub {
       };
     });
     channel.post('hub/service/update', (ChannelBody<Object?> body) {
+      hub.updates += 1;
       if (onUpdate != null) {
         scheduleMicrotask(() => onUpdate(body.sender));
       }
@@ -81,6 +117,22 @@ class FakeHub {
     }
     if (connects.length < count) {
       throw StateError('expected $count connects, got ${connects.length}');
+    }
+  }
+
+  Future<void> waitUpdates(int count) async {
+    for (var i = 0; i < 250 && updates < count; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    if (updates < count) {
+      throw StateError('expected $count service updates, got $updates');
+    }
+  }
+
+  /// Closes every connection, as a restarting hub would.
+  Future<void> dropConnections() async {
+    for (final connection in server.connections.toList()) {
+      await connection.socket.close();
     }
   }
 

@@ -7,8 +7,8 @@ Dart port of [hub-service](https://github.com/v57/hub-service) — connect to a
 [hub](https://github.com/v57/hub-lite) (default `ws://127.0.0.1:1997`), host
 your own post/stream API endpoints, register apps, and call API through the hub.
 
-Connects with **hub-server auth** (a fresh ed25519 keychain token as the `auth`
-header) on every (re)connect; hub-lite ignores the auth header. The wire
+Connects with **hub-server auth**: every (re)connect asks the hub to prove its
+key, then sends a fresh ed25519 keychain token as the `auth` header. The wire
 contract matches the TS reference (`hub/profile/update`, `hub/service/update`,
 AppInterface + element DSL). Auth and devices follow
 [`Docs/Devices/protocol.md`](../../Docs/Devices/protocol.md).
@@ -18,14 +18,21 @@ AppInterface + element DSL). Auth and devices follow
 The keychain (`lib/src/keychain.dart`, TS `keychain.ts` parity) loads or
 generates the `auth` key file in the working directory — the base64 of the
 48-byte PKCS8 DER ed25519 private key followed by the 44-byte SPKI DER public
-key. `sign()` returns a fresh `key.<pub>.<sig>.<expiry>` token, attached as
-the `auth` header on every connect. Override the key path with the `HUBKEY`
+key. `sign()` returns a fresh `key.<pub>.<sig>.<expiry>.<nonce>` token, attached
+as the `auth` header on every connect. Override the key path with the `HUBKEY`
 env var or `setKeyPath(...)`.
 
-- **Hub key:** the first connect uses `v: 0` and calls `hub/info`; the hub key
-  is pinned in `hubs.json` beside the `auth` file and later connects sign
-  `hub1:<hub key>:<expiry>` with `v: 1`. hub-lite stays on v0. `hubKey:`
-  supplies it up front and `forgetHubKey()` clears the pin.
+- **Hub key:** before every connect the service asks `hub/info` with a fresh
+  nonce on a short anonymous connection. Only an answer with a valid proof of
+  the key it claims gets a token, signing `hub1:<hub key>:<challenge>:<expiry>`
+  with `v: 1`. The first proven key is pinned in `hubs.json` beside the `auth`
+  file. A hub that doesn't prove its key, or answers with another than the
+  pinned one, gets nothing and is reported (`lastError`) while the service keeps
+  trying, so calls made right after `start()` wait instead of being lost.
+  `hubKey:` supplies it up front and `forgetHubKey()` clears the pin.
+- **Transport:** plain `ws://` beyond loopback, the overlay and the LAN isn't
+  dialed unless `allowPlaintext: true` or `HUB_ALLOW_PLAINTEXT=1` says so;
+  `hubTransportOf(address)` classifies an address.
 - **Device:** a certificate signed by `~/.hub/device.key` (`HUB_DEVICE_KEY`
   overrides it) goes in the `device` header and is renewed with less than a
   day left. `instance:` sets the instance name and `device: false` turns
@@ -40,7 +47,7 @@ dart pub get   # path dependency on ../../Channel/channel-dart (see pubspec.yaml
 
 ## Usage
 
-Start a hub first (`new Hub()` from hub-lite, listens on 1997), then:
+Start a hub first (hub-server, listens on 1997), then:
 
 ```dart
 import 'package:hub_service/hub_service.dart';
@@ -76,12 +83,13 @@ final response = await service.send('echo/upper', body: 'hello'); // "HELLO"
 
 ## API
 
-- `Service({address, name, icon, sign, hubSign, hubKey, instance, device})` —
+- `Service({address, name, icon, sign, hubKey, allowPlaintext, instance, device})` —
   address is a port (int) or ws:// URL; default `1997` or `HUB` env; `sign`
-  overrides the auth token factory with a v0 one, `hubSign` with one that
-  gets the hub key (default: keychain `auth` file in the cwd)
-- `sign([expires, hubKey])` / `publicKey()` — keychain: fresh
-  `key.<pub>.<sig>.<expiry>` token / the service's SPKI public key (base64)
+  overrides the auth token factory with one given the proven hub key and the
+  challenge (default: keychain `auth` file in the cwd)
+- `sign(hubKey, nonce, [expires])` / `publicKey()` — keychain: fresh
+  `key.<pub>.<sig>.<expiry>.<nonce>` token / the service's SPKI public key
+  (base64)
 - `setKeyPath(path)` — override the auth key file location (`HUBKEY` env also
   works; default `auth` in the cwd)
 - `post(path, handler, {settings})` / `stream(path, handler, {settings})` — fluent;

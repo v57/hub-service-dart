@@ -5,6 +5,8 @@ import 'package:cryptography/cryptography.dart';
 import 'package:hub_service/hub_service.dart';
 import 'package:test/test.dart';
 
+import 'support/fake_hub.dart';
+
 Map<String, Object?> decode(String header) => jsonDecode(
       utf8.decode(base64Url.decode(base64Url.normalize(header.split('.').first))),
     ) as Map<String, Object?>;
@@ -12,6 +14,13 @@ Map<String, Object?> decode(String header) => jsonDecode(
 void main() {
   late Directory dir;
   late String keyPath;
+  late FakeHub hub;
+
+  setUpAll(() async {
+    hub = await FakeHub.start();
+  });
+
+  tearDownAll(() => hub.stop());
 
   setUp(() async {
     dir = await Directory.systemTemp.createTemp('hubdevice-dart-');
@@ -66,7 +75,7 @@ void main() {
   });
 
   test('the service sends a device header for its key', () async {
-    final service = Service(address: 1, instance: 'echo/main', device: Device(path: keyPath));
+    final service = Service(address: hub.port, instance: 'echo/main', device: Device(path: keyPath));
     final headers = await service.authHeaders();
     final body = decode(headers['device']!);
     expect(body['service'], await publicKey());
@@ -92,13 +101,13 @@ void main() {
   });
 
   test('device mode off sends no header', () async {
-    final headers = await Service(address: 1, device: false).authHeaders();
+    final headers = await Service(address: hub.port, device: false).authHeaders();
     expect(headers.containsKey('device'), isFalse);
   });
 
   test('an unusable device key falls back to a plain key connection', () async {
     File('${dir.path}/blocked').writeAsStringSync('not a directory');
-    final service = Service(address: 1, device: Device(path: '${dir.path}/blocked/device.key'));
+    final service = Service(address: hub.port, device: Device(path: '${dir.path}/blocked/device.key'));
     final headers = await service.authHeaders();
     expect(headers.containsKey('device'), isFalse);
     expect(headers['auth'], startsWith('key.'));

@@ -20,9 +20,8 @@ Future<bool> verifyTokenSignature(String token) async {
   final parts = token.split('.');
   final spki = base64.decode(parts[1]);
   final signature = base64.decode(parts[2]);
-  final expiry = parts[3];
   return Ed25519().verify(
-    utf8.encode(expiry),
+    utf8.encode('hub1:hub-key:${parts[4]}:${parts[3]}'),
     signature: Signature(
       signature,
       publicKey: SimplePublicKey(
@@ -50,24 +49,25 @@ void main() {
     } catch (_) {}
   });
 
-  test('sign produces key.<pub>.<sig>.<expiry> and the signature verifies',
+  test('sign produces key.<pub>.<sig>.<expiry>.<nonce> and the signature verifies',
       () async {
-    final token = await sign();
+    final token = await sign('hub-key', 'nonce');
     final parts = token.split('.');
-    expect(parts.length, 4);
+    expect(parts.length, 5);
+    expect(parts[4], 'nonce');
     expect(parts[0], 'key');
     expect(parts[1], await publicKey());
     expect(parts[2], isNotEmpty);
     expect(base64.decode(parts[2]).length, 64);
-    // Expiry is a DECIMAL epoch-seconds string of now + 60 (protocol default).
+    // Expiry is a DECIMAL epoch-seconds string of now + 30 (protocol default).
     expect(parts[3], matches(RegExp(r'^\d+$')));
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    expect(int.parse(parts[3]), closeTo(now + 60, 5));
+    expect(int.parse(parts[3]), closeTo(now + 30, 5));
     expect(await verifyTokenSignature(token), isTrue);
   });
 
   test('auth file is created as base64 of PKCS8+SPKI (92 bytes)', () async {
-    await sign();
+    await sign('hub-key', 'nonce');
     final file = File(keyPath);
     expect(await file.exists(), isTrue);
     final data = base64.decode((await file.readAsString()).trim());
@@ -91,9 +91,9 @@ void main() {
   });
 
   test('auth file round-trips through a setKeyPath reload', () async {
-    final firstToken = await sign();
+    final firstToken = await sign('hub-key', 'nonce');
     setKeyPath(keyPath); // reset module cache; reload from disk
-    final token = await sign();
+    final token = await sign('hub-key', 'nonce');
     expect(token.split('.')[1], firstToken.split('.')[1]);
     expect(await publicKey(), firstToken.split('.')[1]);
     expect(await verifyTokenSignature(token), isTrue);
@@ -103,13 +103,13 @@ void main() {
     await File(keyPath).writeAsString(tsAuthFile);
     setKeyPath(keyPath);
     expect(await publicKey(), tsPublicKey);
-    final token = await sign();
+    final token = await sign('hub-key', 'nonce');
     expect(token.split('.')[1], tsPublicKey);
     expect(await verifyTokenSignature(token), isTrue);
   });
 
   test('sign honors the expires argument', () async {
-    final token = await sign(3600);
+    final token = await sign('hub-key', 'nonce', 3600);
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     expect(int.parse(token.split('.')[3]), closeTo(now + 3600, 5));
     expect(await verifyTokenSignature(token), isTrue);
@@ -118,7 +118,7 @@ void main() {
   test('invalid auth file length throws StateError', () async {
     await File(keyPath).writeAsString(base64.encode(List<int>.filled(10, 1)));
     setKeyPath(keyPath);
-    expect(sign(), throwsStateError);
+    expect(sign('hub-key', 'nonce'), throwsStateError);
   });
 
   test('Service defaults sign to the keychain token factory', () {

@@ -60,9 +60,11 @@ String _hex(List<int> bytes) =>
 /// First 32 hex characters of SHA-256 over the device SPKI DER.
 String deviceId(String publicKey) => _hex(_sha256(publicKey)).substring(0, 32);
 
-/// The code shown on both sides when approving a device: `"ddd ddd"`.
-String safetyCode(String publicKey) {
-  final n = int.parse(_hex(_sha256(publicKey)).substring(0, 8), radix: 16) % 1000000;
+/// The code shown on both sides when approving a device: `"ddd ddd"`. [hubKey] is the key this side pinned, [codeValue]
+/// what the hub picked after it had the device's key (`hub/device/request`).
+String safetyCode(String hubKey, String deviceKey, String codeValue) {
+  final hash = Sha256().toSync().hashSync(utf8.encode('hubcode1:$hubKey:$deviceKey:$codeValue')).bytes;
+  final n = int.parse(_hex(hash).substring(0, 8), radix: 16) % 1000000;
   final digits = n.toString().padLeft(6, '0');
   return '${digits.substring(0, 3)} ${digits.substring(3)}';
 }
@@ -163,7 +165,7 @@ class Device {
 
   Future<String> id() async => deviceId(await publicKey());
 
-  Future<String> safety() async => safetyCode(await publicKey());
+  Future<String> safety(String hubKey, String codeValue) async => safetyCode(hubKey, await publicKey(), codeValue);
 
   /// The certificate for a service key, renewed with < 24 h left.
   Future<String> certificate(String service, String instance, {int? now}) async {

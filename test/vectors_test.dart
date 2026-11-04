@@ -36,7 +36,9 @@ void main() {
   test('device id and safety code', () {
     final device = keyVector('device');
     expect(deviceId(field(device, 'publicKey')), field(device, 'deviceId'));
-    expect(safetyCode(field(device, 'publicKey')), field(device, 'safetyCode'));
+    for (final code in (section('safetyCode')['cases']! as List).cast<Map<String, Object?>>()) {
+      expect(safetyCode(code['hubKey'] as String, code['deviceKey'] as String, code['codeValue'] as String), code['code']);
+    }
   });
 
   test('auth tokens', () async {

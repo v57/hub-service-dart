@@ -10,8 +10,11 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
+  # scripts/test overrides this with ../../Channel/channel-dart when that checkout is there.
   channel_dart:
-    path: ../../Channel/channel-dart
+    git:
+      url: https://github.com/v57/channel-dart
+      ref: a6e9f95675c197d6a06a799c1bf3001f9168d2e0
   cryptography: ^2.9.0
 
 dev_dependencies:

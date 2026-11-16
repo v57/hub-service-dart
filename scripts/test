@@ -11,6 +11,15 @@ device_dir="$(mktemp -d)"
 trap 'rm -rf "$device_dir"' EXIT
 export HUB_DEVICE_KEY="$device_dir/device.key"
 
+# Next to a Channel checkout, test against it instead of the channel_dart revision pubspec.yaml names. The
+# override rewrites pubspec.lock, so the committed lock (the git revision) is put back afterwards.
+channel=../../Channel/channel-dart
+if [[ -d "$channel" && ! -f pubspec_overrides.yaml ]]; then
+  cp pubspec.lock "$device_dir/pubspec.lock"
+  printf 'dependency_overrides:\n  channel_dart:\n    path: %s\n' "$channel" > pubspec_overrides.yaml
+  trap 'rm -f pubspec_overrides.yaml; mv "$device_dir/pubspec.lock" pubspec.lock; rm -rf "$device_dir"' EXIT
+fi
+
 dart pub get >/dev/null
 dart analyze
 dart test -r expanded

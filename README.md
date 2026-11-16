@@ -41,15 +41,25 @@ env var or `setKeyPath(...)`.
 
 ## Install
 
-```bash
-dart pub get   # path dependency on ../../Channel/channel-dart (see pubspec.yaml)
+Not published to pub.dev; pub takes it from git. In your `pubspec.yaml`:
+
+```yaml
+dependencies:
+  hub_service:
+    git: https://github.com/v57/hub-service-dart
 ```
+
+Then `dart pub get`. It brings [channel-dart](https://github.com/v57/channel-dart) along from git, at the revision
+this package's `pubspec.yaml` names. `scripts/test` runs against a `../../Channel/channel-dart` checkout instead
+when there is one.
 
 ## Usage
 
 Start a hub first (hub-server, listens on 1997), then:
 
 ```dart
+import 'dart:async';
+
 import 'package:hub_service/hub_service.dart';
 
 Future<void> main() async {
